@@ -1,0 +1,6 @@
+archives=6
+acquisitions=52
+rows=6341 keep=5618 discard=723
+hard_invalid_v13b=300
+coefficients=-1.4169522023,-0.4050302588,42.6003834983
+archive_holdout_pooled_auc=0.9600094933

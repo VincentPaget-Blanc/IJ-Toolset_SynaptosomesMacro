@@ -1,0 +1,42 @@
+{
+  "model": "logistic_regression",
+  "fit_protocol": "historical_classifier_standardized_balanced_l2",
+  "feature_geometry": "historical_classifier",
+  "hard_invalid_audit_geometry": "imagej_runtime",
+  "features": [
+    "maxLocalSNR",
+    "meanBackgroundCV"
+  ],
+  "coefficients_original_feature_units": {
+    "intercept": -1.4169522022672114,
+    "maxLocalSNR": -0.40503025878153537,
+    "meanBackgroundCV": 42.60038349826937
+  },
+  "standardization": {
+    "mean": [
+      6.031352886083793,
+      0.07923688156508792
+    ],
+    "scale": [
+      3.2184054224012106,
+      0.1485571139560943
+    ]
+  },
+  "logistic_regression": {
+    "C": 1.0,
+    "class_weight": "balanced",
+    "solver": "lbfgs",
+    "tol": 0.0001,
+    "max_iter": 100
+  },
+  "exclude_hard_invalid_from_fit": false,
+  "archive_holdout_pooled_roc_auc": 0.9600094932953602,
+  "versions": {
+    "python": "3.13.5",
+    "numpy": "2.3.5",
+    "pandas": "2.2.3",
+    "scikit_learn": "1.8.0",
+    "scipy": "1.17.0",
+    "tifffile": "2026.5.15"
+  }
+}

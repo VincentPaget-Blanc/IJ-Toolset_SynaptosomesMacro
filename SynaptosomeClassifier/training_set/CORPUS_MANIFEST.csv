@@ -1,0 +1,2 @@
+repository_version,archives,acquisitions,manual_roi_decisions,manual_keeps,manual_discards,hard_invalid_v13b_audit,training_feature_geometry,fit_includes_hard_invalid_rows
+13b,6,52,6341,5618,723,300,historical_classifier,yes (historical fit; runtime hard gate is separate)

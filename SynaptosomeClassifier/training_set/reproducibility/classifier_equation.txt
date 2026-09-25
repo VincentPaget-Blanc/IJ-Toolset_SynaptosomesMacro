@@ -1,0 +1,2 @@
+z = -1.4169522023 -0.4050302588*maxLocalSNR +42.6003834983*meanBackgroundCV
+discardScore = 1/(1+exp(-z))

@@ -1,0 +1,2 @@
+intercept,beta_maxLocalSNR,beta_meanBackgroundCV,scaled_intercept,scaled_beta_maxLocalSNR,scaled_beta_meanBackgroundCV,scaler_mean_maxLocalSNR,scaler_mean_meanBackgroundCV,scaler_scale_maxLocalSNR,scaler_scale_meanBackgroundCV,archive_holdout_pooled_roc_auc,n_total,n_used_for_fit,n_keep,n_discard,n_hard_invalid_v13b
+-1.4169522022672114,-0.40503025878153537,42.60038349826937,-0.48431108064079464,-1.303551581099059,6.328590025925722,6.031352886083793,0.07923688156508792,3.2184054224012106,0.1485571139560943,0.9600094932953602,6341,6341,5618,723,300

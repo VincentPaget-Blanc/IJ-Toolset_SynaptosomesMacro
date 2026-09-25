@@ -1,3 +1,9 @@
+// SynaptosomesMacro_Randomization_AutoROI — Version 13b
+// Repository-facing release label; 13a was the first AutoROI iteration.
+// Version 13b keeps the audited AutoROI processing logic and repository-facing version provenance.
+// 25/09/2026 hotfixes: create the threshold progress Text Window before using \Update;
+// restore the visible ROI Manager after the read-only threshold preflight; guard selection-dependent validity checks.
+
 var LUTs=newArray("Green", "Magenta", "Blue");
 var nLabels=2;
 var in="";
@@ -6,22 +12,35 @@ var labels=newArray();
 var basename="Analysis";
 var autoDiscardEnabled=false;
 var autoDiscardMode="User validated";
-var autoDiscardThreshold=0.30;
-var hardDiscarded=newArray(); // Per-image mask: 1 = invalid (NaN or black padding in a measurement region)
+var autoDiscardThreshold=0.90;
+var hardDiscarded=newArray(); // Per-image mask: 1 = invalid (NaN/zero in a measurement region or geometric edge padding)
+var thresholdProgressWindowTitle="Dataset threshold analysis progress";
 var sessionParams=newArray(64, 3, 3, 5, 100, 32, 0.103, 10000, 0.217); // Session-only GUI values; initialized when this toolset is loaded
 var sessionLabelNames=newArray("Label_1", "Label_2", "Label_3");
 var sessionBatchPatterns=newArray("G Ex 470 Em QuadA", "R Ex 550 Em QuadA", "");
 var resultsWindowWaitMs=10000; // Maximum wait for non-image table windows to be registered by Fiji
+var thresholdAnalysisRequested=false; // One-shot batch preflight; never persisted across GUI reopenings unless reselected
+var thresholdAnalysisCandidates=0;
+var thresholdAnalysisInvalid=0;
+var thresholdAnalysisSets=0;
+var thresholdReviewSuggestion=0.30; // Review-oriented operating point validated on the supplied user-reviewed datasets
+var thresholdAutoSafetyMargin=0.17; // Conservative margin above the current dataset median valid score
+var thresholdAnalysisPerformedForRun=false; // Provenance only; does not affect processing
+var thresholdAnalysisMedianForRun=NaN;
+var thresholdAnalysisReviewForRun=NaN;
+var thresholdAnalysisAutoForRun=NaN;
 
 
 macro "Single Acquisition Action Tool - C555D31D3eD4eD5aD5eD6aD6eD7aD7eD8aD8eD91D9aD9eDa1Da2Da3DaaDaeDb2Db3DbeDc3DceCeeeD3fD4bD4fD5fD6fD7fD8fD95D9fDa5DafDbbDbfDcfCaaaD22D23D24D25D26D27D28D29D2aD2bD2cD2dD2eD32D33D34D35D36D37D38D39D3aD3bD3cD3dD4aD74Db6Db7Db9DbaDc2Dc4DcdDd3DdeC999D54D55D58D64D65D68D75D78D88D98Da8Dd4Dd5Dd6Dd7Dd8Dd9DdaDdbDdcDddCfffD2fD30D40D42D4dD50D52D5dD60D62D6dD70D72D7dD80D82D84D8dD90D9dDadDb5DbdDdfCcccD21D44D45D46D47D48D49D5bD6bD7bD85D8bD92D93D9bDa4DabDb1Db4Db8Dc5Dc6Dc7Dc8Dc9DcaDcbDccC777D41D51D56D57D59D61D66D67D69D71D76D77D79D81D86D87D89D96D97D99Da6Da7Da9"{
 	prepare(true);
+	saveRunParameters(true); // Final accepted GUI values, saved before any analysis processing
 	process();
 }
 
 macro "Multiple Acquisitions Action Tool - C333D2fD3fD40D4fD50D5fD60D6fD70D7fD80D8fD90D93D94D9fDa0Da3Da4DafDb1Db2Db4DbfDc1Dc2DcdDd2CcccD12D35D36D37D38D39D3aD3bD41D4cD76D83D95Da5DacDb6Db7Db8Db9DbaDbbDbcDbdDbeDc0De2DedC999D23D24D25D26D27D28D29D2aD2bD2cD2dD2eD46D49D56D59D66D69D79D89D99Da2Da7DaaDabDb3Dc4Dd3Dd4Dd5Dd6Dd7Dd8Dd9DdaDdbDdcC777D31D48D4aD58D5aD68D6aD78D7aD88D8aD98D9aDc5Dc6Dc7Dc8Dc9DcaDcbDccDceCeeeD21D33D3cD3eD43D4eD51D53D5eD61D63D6eD71D73D75D7eD81D84D86D8eD91D96D9eDa6DaeDc3DdeCbbbD13D14D15D16D17D18D19D1aD1bD1cD1dD1eD1fD45D55D5cD65D6cD7cD8cD9cDa1Da8Da9Db5Dd1De3De4De5De6De7De8De9DeaDebDecC666D22D30D32D42D47D4bD52D57D5bD62D67D6bD72D77D7bD82D87D8bD92D97D9bDb0DcfDdd"{
 	run("Close All");
 	prepare(false);
+	saveRunParameters(false); // Final accepted GUI values, saved before opening/processing the first acquisition
 
 	channel1=getFileNamesContaining(in, labels[0]);
 
@@ -70,12 +89,49 @@ function init(){
 //-----------------------------------------
 function prepare(isSingle){
 	init();
+	thresholdAnalysisPerformedForRun=false;
+	thresholdAnalysisMedianForRun=NaN;
+	thresholdAnalysisReviewForRun=NaN;
+	thresholdAnalysisAutoForRun=NaN;
 
 	nLabels=getNumber("Number of channels to analyse", nLabels);
 	if(!isSingle) in=getDirectory("Where are the input files ?");
 	out=getDirectory("Where to save the output files ?");
 
 	labels=GUI(nLabels, isSingle);
+
+	// Dataset threshold analysis is intentionally batch-only: it scans every acquisition with the
+	// current GUI parameters, writes nothing, then reopens this same GUI with the suggestion.
+	while(!isSingle && thresholdAnalysisRequested){
+		thresholdAnalysisRequested=false;
+		if(!autoDiscardEnabled){
+			showMessage("Dataset threshold analysis", "Enable automatic ROI discard before requesting threshold analysis.");
+		}else{
+			suggestedThresholds=analyzeDatasetThreshold();
+			if(!isNaN(suggestedThresholds[2])){
+				thresholdAnalysisPerformedForRun=true;
+				thresholdAnalysisReviewForRun=suggestedThresholds[0];
+				thresholdAnalysisAutoForRun=suggestedThresholds[1];
+				thresholdAnalysisMedianForRun=suggestedThresholds[2];
+				if(autoDiscardMode=="Fully automatic") autoDiscardThreshold=suggestedThresholds[1];
+				else autoDiscardThreshold=suggestedThresholds[0];
+
+				message="Analyzed "+thresholdAnalysisSets+" acquisition(s), "+thresholdAnalysisCandidates+" candidate ROI(s).\n";
+				message+="Hard-invalid ROI(s): "+thresholdAnalysisInvalid+".\n";
+				message+="Median valid discard score: "+d2s(suggestedThresholds[2], 3)+".\n\n";
+				message+="Suggested User validated threshold: "+d2s(suggestedThresholds[0], 2)+".\n";
+				message+="Suggested Fully automatic threshold: "+d2s(suggestedThresholds[1], 2)+".\n\n";
+				message+="The threshold field has been set for the selected mode. The GUI will reopen so it can be reviewed or edited before processing.";
+				if(suggestedThresholds[2]>0.25) message+="\n\nNote: this dataset is above the median-score range directly validated so far; Fully automatic use is an extrapolation and User validated mode remains preferable.";
+				if(thresholdAnalysisCandidates-thresholdAnalysisInvalid<100) message+="\n\nNote: fewer than 100 valid ROIs were available, so the dataset-level estimate is less stable.";
+				showMessage("Dataset threshold analysis", message);
+			}else{
+				showMessage("Dataset threshold analysis", "No valid ROI scores could be collected with the current parameters. No threshold was changed.");
+			}
+			closeThresholdProgressWindow();
+		}
+		labels=GUI(nLabels, isSingle);
+	}
 }
 
 //-----------------------------------------
@@ -111,7 +167,8 @@ function GUI(nLabels, isSingle){
 	Dialog.addCheckbox("Enable_automatic_ROI_discard", autoDiscardEnabled);
 	Dialog.addChoice("Automatic_review_mode_(used_only_when_enabled)", newArray("User validated", "Fully automatic"), autoDiscardMode);
 	Dialog.addNumber("Discard_score_threshold_(0-1;_used_only_when_enabled)", autoDiscardThreshold, 2, 6, "");
-	Dialog.addMessage("Automatic settings are used only when automatic ROI discard is enabled.\nScore >= threshold is pre-discarded; lower = more aggressive, higher = more conservative.\nROIs containing NaN pixels or black padding in the quantification circle/background annulus are always discarded.");
+	if(!isSingle) Dialog.addCheckbox("Analyze_dataset_and_suggest_threshold", false);
+	Dialog.addMessage("Automatic settings are used only when automatic ROI discard is enabled.\nScore >= threshold is pre-discarded; lower = more aggressive, higher = more conservative.\nROIs containing NaN/zero pixels in the quantification circle/background annulus, or all-channel zero/NaN padding on a detection-square edge, are always discarded.\nThreshold analysis (batch only) scans all acquisitions with the current parameters, writes nothing, then reopens this GUI with a suggestion.");
 	Dialog.addMessage("---Randomization---");
 	Dialog.addNumber("#_monte_carlo_simulations", sessionParams[7]);
 	Dialog.addNumber("distance_max_colocalization_(microns)", sessionParams[8]);
@@ -137,10 +194,279 @@ function GUI(nLabels, isSingle){
 	params[2*nLabels+8]=Dialog.getNumber();
 	for(i=0; i<9; i++) sessionParams[i]=params[2*nLabels+i];
 	autoDiscardEnabled=Dialog.getCheckbox();
+	if(!isSingle) thresholdAnalysisRequested=Dialog.getCheckbox();
+	else thresholdAnalysisRequested=false;
 	autoDiscardMode=Dialog.getChoice();
 	if(autoDiscardEnabled && (autoDiscardThreshold<0 || autoDiscardThreshold>1)) exit("Discard score threshold must be between 0 and 1.");
 	
 	return params;
+}
+
+
+//-----------------------------------------
+function saveRunParameters(isSingle){
+	// Audit-only CSV written once, after the final GUI is accepted and before analysis processing starts.
+	// No processing parameter is modified here.
+	content="Parameter,Value\n";
+	content+="Macro_version,"+csvValue("13b")+"\n";
+	if(isSingle) content+="Analysis_mode,"+csvValue("Single Acquisition")+"\n";
+	else content+="Analysis_mode,"+csvValue("Multiple Acquisitions")+"\n";
+	if(!isSingle) content+="Input_folder,"+csvValue(in)+"\n";
+	content+="Output_folder,"+csvValue(out)+"\n";
+	content+="Number_of_channels,"+csvValue(nLabels)+"\n";
+
+	for(i=0; i<nLabels; i++){
+		if(isSingle) content+="Channel_"+(i+1)+"_image,"+csvValue(labels[2*i])+"\n";
+		else content+="Channel_"+(i+1)+"_filename_contains,"+csvValue(labels[2*i])+"\n";
+		content+="Channel_"+(i+1)+"_label_name,"+csvValue(labels[2*i+1])+"\n";
+		content+="Channel_"+(i+1)+"_LUT,"+csvValue(LUTs[i])+"\n";
+	}
+
+	content+="Size_of_the_detection_square,"+csvValue(labels[2*nLabels])+"\n";
+	content+="Radius_for_spots_filtering,"+csvValue(labels[2*nLabels+1])+"\n";
+	content+="Noise_tolerance_for_spots_detection,"+csvValue(labels[2*nLabels+2])+"\n";
+	content+="Min_size_for_spots_pixels,"+csvValue(labels[2*nLabels+3])+"\n";
+	content+="Max_size_for_spots_pixels,"+csvValue(labels[2*nLabels+4])+"\n";
+	content+="Size_of_the_quantification_circle_square,"+csvValue(labels[2*nLabels+5])+"\n";
+	content+="Pixel_size_in_microns,"+csvValue(labels[2*nLabels+6])+"\n";
+	content+="Enable_automatic_ROI_discard,"+csvValue(autoDiscardEnabled)+"\n";
+	content+="Automatic_review_mode,"+csvValue(autoDiscardMode)+"\n";
+	content+="Discard_score_threshold,"+csvValue(autoDiscardThreshold)+"\n";
+	content+="Dataset_threshold_analysis_performed,"+csvValue(thresholdAnalysisPerformedForRun)+"\n";
+	if(thresholdAnalysisPerformedForRun){
+		content+="Threshold_analysis_acquisitions,"+csvValue(thresholdAnalysisSets)+"\n";
+		content+="Threshold_analysis_candidates,"+csvValue(thresholdAnalysisCandidates)+"\n";
+		content+="Threshold_analysis_hard_invalid_ROIs,"+csvValue(thresholdAnalysisInvalid)+"\n";
+		content+="Threshold_analysis_median_valid_score,"+csvValue(thresholdAnalysisMedianForRun)+"\n";
+		content+="Threshold_analysis_suggested_user_validated,"+csvValue(thresholdAnalysisReviewForRun)+"\n";
+		content+="Threshold_analysis_suggested_fully_automatic,"+csvValue(thresholdAnalysisAutoForRun)+"\n";
+	}
+	content+="Monte_carlo_simulations,"+csvValue(labels[2*nLabels+7])+"\n";
+	content+="Distance_max_colocalization_microns,"+csvValue(labels[2*nLabels+8])+"\n";
+
+	logPath=nextRunParameterLogPath();
+	File.saveString(content, logPath);
+	print("Run parameters saved: "+logPath);
+}
+
+//-----------------------------------------
+function csvValue(value){
+	text=""+value;
+	text=replace(text, "\"", "\"\"");
+	return "\""+text+"\"";
+}
+
+//-----------------------------------------
+function nextRunParameterLogPath(){
+	path=out+"Run_Parameters.csv";
+	index=2;
+	while(File.exists(path)){
+		path=out+"Run_Parameters_"+index+".csv";
+		index++;
+	}
+	return path;
+}
+
+//-----------------------------------------
+function updateThresholdProgressWindow(progress, currentSet, totalSets, stage){
+	if(progress<0) progress=0;
+	if(progress>1) progress=1;
+	barWidth=28;
+	filled=floor(progress*barWidth+0.5);
+	bar="";
+	for(pb=0; pb<barWidth; pb++){
+		if(pb<filled) bar+="#";
+		else bar+="-";
+	}
+	percent=round(progress*100);
+	text="Dataset threshold analysis\n\n["+bar+"] "+percent+"%\n";
+	if(totalSets>0) text+="Acquisition "+currentSet+" / "+totalSets+"\n";
+	text+="Stage: "+stage+"\n\nRead-only preflight: no analysis output is written.";
+	progressWindow="["+thresholdProgressWindowTitle+"]";
+	if(!isOpen(thresholdProgressWindowTitle))
+		run("Text Window...", "name="+progressWindow+" width=52 height=7 monospaced");
+	print(progressWindow, "\\Update:"+text);
+}
+
+//-----------------------------------------
+function closeThresholdProgressWindow(){
+	if(isOpen(thresholdProgressWindowTitle))
+		print("["+thresholdProgressWindowTitle+"]", "\\Close");
+}
+
+//-----------------------------------------
+function analyzeDatasetThreshold(){
+	// Dry-run for Multiple Acquisitions only. Reuses the existing preprocessing/detection/Gallery
+	// construction and validity geometry, but does not quantify, save, pool or randomize anything.
+	baseLabels=Array.copy(labels);
+	channel1=getFileNamesContaining(in, baseLabels[0]);
+	allScores=newArray(0);
+	thresholdAnalysisCandidates=0;
+	thresholdAnalysisInvalid=0;
+	thresholdAnalysisSets=0;
+
+	totalThresholdSets=channel1.length;
+	if(totalThresholdSets>0){
+		showStatus("Threshold analysis: preparing 1/"+totalThresholdSets);
+		showProgress(0);
+		updateThresholdProgressWindow(0, 1, totalThresholdSets, "Preparing");
+	}
+
+	// Keep the dry-run ROI list off the visible Swing ROI Manager. In batch mode ImageJ
+	// then uses its hidden batch RoiManager, avoiding UI list repaint races while ROIs are reset/rebuilt.
+	if(isOpen("ROI Manager")) close("ROI Manager");
+	setBatchMode(true);
+	for(a=0; a<channel1.length; a++){
+		if(totalThresholdSets>0){
+			showStatus("Threshold analysis: "+(a+1)+"/"+totalThresholdSets+" - loading images");
+			showProgress((a+0.05)/totalThresholdSets);
+			updateThresholdProgressWindow((a+0.05)/totalThresholdSets, a+1, totalThresholdSets, "Loading images");
+		}
+		labels=Array.copy(baseLabels);
+		hasAllFiles=true;
+		firstLabel=labels[0];
+
+		for(j=0; j<nLabels; j++){
+			labels[2*j]=replace(channel1[a], firstLabel, labels[2*j]);
+			if(!File.exists(in+labels[2*j])){
+				hasAllFiles=false;
+				print("Threshold analysis - missing file: "+labels[2*j]);
+			}
+		}
+
+		if(hasAllFiles){
+			for(j=0; j<nLabels; j++) open(in+labels[2*j]);
+			if(totalThresholdSets>0){
+				showStatus("Threshold analysis: "+(a+1)+"/"+totalThresholdSets+" - preprocessing");
+				showProgress((a+0.20)/totalThresholdSets);
+				updateThresholdProgressWindow((a+0.20)/totalThresholdSets, a+1, totalThresholdSets, "Preprocessing");
+			}
+			reduce(labels, nLabels);
+			normaliseImages(labels, nLabels);
+			if(totalThresholdSets>0){
+				showStatus("Threshold analysis: "+(a+1)+"/"+totalThresholdSets+" - detecting ROIs");
+				showProgress((a+0.45)/totalThresholdSets);
+				updateThresholdProgressWindow((a+0.45)/totalThresholdSets, a+1, totalThresholdSets, "Detecting ROIs");
+			}
+			detectSpots(labels, nLabels);
+			dimensions=overlayAndCutOut(labels, nLabels);
+
+			if(dimensions[0]!=0 && dimensions[1]!=0){
+				if(totalThresholdSets>0){
+					showStatus("Threshold analysis: "+(a+1)+"/"+totalThresholdSets+" - scoring ROIs");
+					showProgress((a+0.75)/totalThresholdSets);
+					updateThresholdProgressWindow((a+0.75)/totalThresholdSets, a+1, totalThresholdSets, "Scoring ROIs");
+				}
+				thresholdAnalysisSets++;
+				thresholdAnalysisCandidates+=roiManager("Count");
+				generateROIs(roiManager("Count"), labels[labels.length-9], dimensions);
+				identifyInvalidROIs(labels[labels.length-9], dimensions);
+				for(k=0; k<hardDiscarded.length; k++) if(hardDiscarded[k]==1) thresholdAnalysisInvalid++;
+				setScores=collectDiscardScores(labels[labels.length-9], dimensions);
+				allScores=Array.concat(allScores, setScores);
+			}
+
+			run("Close All");
+			roiManager("Reset");
+			run("Clear Results");
+		}
+		if(totalThresholdSets>0){
+			showProgress((a+1)/totalThresholdSets);
+			showStatus("Threshold analysis: "+(a+1)+"/"+totalThresholdSets+" complete");
+			updateThresholdProgressWindow((a+1)/totalThresholdSets, a+1, totalThresholdSets, "Acquisition complete");
+		}
+	}
+	labels=Array.copy(baseLabels);
+	setBatchMode("exit and display");
+
+	// The threshold preflight deliberately closes the visible ROI Manager to avoid the FlatLaf
+	// repaint race during repeated dry-run list mutations. Leaving batch mode discards ImageJ's
+	// hidden batch RoiManager, so restore an empty visible manager before returning to the GUI.
+	// The normal processing path relies on this visible manager surviving its own batch-mode
+	// detection step so the detected ROI list is still available for interactive review.
+	run("ROI Manager...");
+	roiManager("Reset");
+
+	if(totalThresholdSets>0) showProgress(1);
+
+	if(allScores.length==0){
+		showStatus("Threshold analysis finished: no valid ROI scores collected");
+		if(totalThresholdSets>0) updateThresholdProgressWindow(1, totalThresholdSets, totalThresholdSets, "Finished - no valid ROI scores");
+		return newArray(NaN, NaN, NaN);
+	}
+
+	medianScore=arrayMedian(allScores);
+	reviewThreshold=thresholdReviewSuggestion;
+	fullyAutomaticThreshold=medianScore+thresholdAutoSafetyMargin;
+	if(fullyAutomaticThreshold<0.30) fullyAutomaticThreshold=0.30;
+	if(fullyAutomaticThreshold>0.90) fullyAutomaticThreshold=0.90;
+
+	showStatus("Threshold analysis complete: "+thresholdAnalysisSets+" acquisitions, "+allScores.length+" valid ROIs");
+	if(totalThresholdSets>0) updateThresholdProgressWindow(1, totalThresholdSets, totalThresholdSets, "Complete");
+	return newArray(reviewThreshold, fullyAutomaticThreshold, medianScore);
+}
+
+//-----------------------------------------
+function collectDiscardScores(boxSize, dimensions){
+	// Read-only counterpart of automaticDiscardROIs(): same score equation and same measurement
+	// regions, but it only returns scores for valid ROIs and never changes their keep/discard state.
+	selectWindow("Gallery");
+	getDimensions(width, height, channels, slices, frames);
+	quantSize=labels[labels.length-4];
+	getPixelSize(unit, pixelWidth, pixelHeight);
+	bandWidth=(boxSize/2-quantSize/2-1)*pixelWidth;
+	scores=newArray(0);
+
+	for(i=0; i<roiManager("Count"); i++){
+		if(hardDiscarded[i]==0){
+			xCell=i%dimensions[0];
+			yCell=floor(i/dimensions[0]);
+			x0=xCell*boxSize+boxSize/2-quantSize/2;
+			y0=yCell*boxSize+boxSize/2-quantSize/2;
+			maxLocalSNR=-1e30;
+			sumBackgroundCV=0;
+
+			for(c=1; c<=channels; c++){
+				Stack.setChannel(c);
+				makeOval(x0, y0, quantSize, quantSize);
+				getStatistics(centerArea, centerMean);
+
+				run("Make Band...", "band="+bandWidth);
+				getStatistics(backgroundArea, backgroundMean, backgroundMin, backgroundMax, backgroundStd);
+
+				if(backgroundStd>0) localSNR=(centerMean-backgroundMean)/backgroundStd;
+				else if(centerMean>backgroundMean) localSNR=1e30;
+				else localSNR=0;
+
+				if(abs(backgroundMean)>1e-12) backgroundCV=backgroundStd/abs(backgroundMean);
+				else if(backgroundStd>0) backgroundCV=1e30;
+				else backgroundCV=0;
+
+				if(localSNR>maxLocalSNR) maxLocalSNR=localSNR;
+				sumBackgroundCV+=backgroundCV;
+			}
+
+			meanBackgroundCV=sumBackgroundCV/channels;
+			logit=-1.4169522-0.4050303*maxLocalSNR+42.6003835*meanBackgroundCV;
+			discardScore=1/(1+exp(-logit));
+			scores=Array.concat(scores, discardScore);
+		}
+	}
+
+	Stack.setChannel(1);
+	run("Select None");
+	roiManager("Deselect");
+	return scores;
+}
+
+//-----------------------------------------
+function arrayMedian(values){
+	sorted=Array.copy(values);
+	Array.sort(sorted);
+	n=sorted.length;
+	middle=floor(n/2);
+	if(n%2==1) return sorted[middle];
+	return (sorted[middle-1]+sorted[middle])/2;
 }
 
 //-----------------------------------------
@@ -396,9 +722,10 @@ function manualReviewLoop(size, dimensions, leftButton){
 
 //-----------------------------------------
 function identifyInvalidROIs(boxSize, dimensions){
-	// Hard validity rule: if either measurement region contains an actual NaN or an exact-zero
-	// pixel in any measured channel (padding/invalid data), discard it. Pixels outside the two
-	// measurement regions remain irrelevant and do not trigger rejection.
+	// Hard validity rule: retain the existing measurement-region NaN/zero check and additionally
+	// reject geometric crop padding when an outer edge of the full detection square is entirely
+	// NaN/zero across all measured channels. This catches edge padding that sits outside the
+	// quantification circle/background annulus without making isolated zero pixels elsewhere fatal.
 	selectWindow("Gallery");
 	getDimensions(width, height, channels, slices, frames);
 	quantSize=labels[labels.length-4];
@@ -409,12 +736,19 @@ function identifyInvalidROIs(boxSize, dimensions){
 	for(i=0; i<roiManager("Count"); i++){
 		xCell=i%dimensions[0];
 		yCell=floor(i/dimensions[0]);
-		x0=xCell*boxSize+boxSize/2-quantSize/2;
-		y0=yCell*boxSize+boxSize/2-quantSize/2;
-		isInvalid=false;
+		tileX=xCell*boxSize;
+		tileY=yCell*boxSize;
+		x0=tileX+boxSize/2-quantSize/2;
+		y0=tileY+boxSize/2-quantSize/2;
+		isInvalid=tileHasInvalidEdgePadding(tileX, tileY, boxSize, channels);
 
-		makeOval(x0, y0, quantSize, quantSize);
-		if(selectionHasInvalidPixels(channels)) isInvalid=true;
+		// ImageJ macro logical AND evaluates both operands. Keep the selection-dependent
+		// check inside this block so it is never called when edge padding already made
+		// the candidate invalid and no oval selection was created.
+		if(!isInvalid){
+			makeOval(x0, y0, quantSize, quantSize);
+			if(selectionHasInvalidPixels(channels)) isInvalid=true;
+		}
 
 		if(!isInvalid){
 			run("Make Band...", "band="+bandWidth);
@@ -432,6 +766,27 @@ function identifyInvalidROIs(boxSize, dimensions){
 	roiManager("Deselect");
 	roiManager("Show All without labels");
 	updateDisplay();
+}
+
+//-----------------------------------------
+function tileHasInvalidEdgePadding(x0, y0, boxSize, channels){
+	if(edgeIsAllInvalid(x0, y0, 1, 0, boxSize, channels)) return true;
+	if(edgeIsAllInvalid(x0, y0+boxSize-1, 1, 0, boxSize, channels)) return true;
+	if(edgeIsAllInvalid(x0, y0, 0, 1, boxSize, channels)) return true;
+	if(edgeIsAllInvalid(x0+boxSize-1, y0, 0, 1, boxSize, channels)) return true;
+	return false;
+}
+
+//-----------------------------------------
+function edgeIsAllInvalid(x0, y0, dx, dy, nPixels, channels){
+	for(cPad=1; cPad<=channels; cPad++){
+		Stack.setChannel(cPad);
+		for(pPad=0; pPad<nPixels; pPad++){
+			value=getPixel(x0+pPad*dx, y0+pPad*dy);
+			if(!isNaN(value) && value!=0) return false;
+		}
+	}
+	return true;
 }
 
 //-----------------------------------------
@@ -563,7 +918,7 @@ function updateRoiStatus(x, y, boxSize, dimensions){
 	if(index<roiManager("Count")){
 		if(index<hardDiscarded.length){
 			if(hardDiscarded[index]==1){
-				showStatus("ROI contains NaN/black padding in the quantification/background region and is always discarded");
+				showStatus("ROI contains invalid measurement pixels or geometric edge padding and is always discarded");
 				return;
 			}
 		}
