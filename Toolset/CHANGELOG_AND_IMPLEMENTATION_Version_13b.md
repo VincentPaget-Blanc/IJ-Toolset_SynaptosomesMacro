@@ -18,7 +18,7 @@ This separation is important because the classifier coefficients and the operati
 
 ## 2. Version 13b changelog
 
-### 2.1 25/09/2026 surgical progress-window hotfix
+### 2.1 25/09/2026 progress-window hotfix
 
 The dedicated threshold-preflight processing window introduced during the final internal `v1.10.2` development step had a window-lifecycle bug. Its first call attempted to send an update command to a named ImageJ Text Window before that window had been created. The same helper also used a single source backslash for the special update command rather than the escaped `\\Update:` form used by ImageJ's own macro examples.
 
@@ -44,7 +44,7 @@ The documentation was also checked for repository Markdown math rendering. Displ
 
 This bug is confirmed to have been introduced when the dedicated processing window was added: the retained `HISTORICAL_INTERNAL_v1.10.1_to_v1.10.2.diff` contains the first addition of `updateThresholdProgressWindow()` and its first preflight call, whereas internal `v1.10.1` had only the existing ImageJ status/progress reporting.
 
-### 2.2 25/09/2026 surgical edge-padding selection hotfix
+### 2.2 25/09/2026 edge-padding selection hotfix
 
 A second runtime regression appeared during dataset threshold preflight:
 
@@ -74,7 +74,7 @@ if(!isInvalid){
 
 The hard-invalid decision itself is unchanged: edge-padded candidates are still rejected; non-edge-padded candidates still undergo the same quantification-circle and background-annulus zero/NaN checks. No classifier feature, coefficient, threshold, detection, quantification, or randomization code was changed.
 
-### 2.3 25/09/2026 surgical ROI-Manager lifecycle hotfix
+### 2.3 25/09/2026 ROI-Manager lifecycle hotfix
 
 After the threshold-preflight UI hardening, the real analysis could reach ROI review without the detected ROI list that drives the green/red overlay. This regression was introduced by one line in the final internal `v1.10.2` development step:
 
